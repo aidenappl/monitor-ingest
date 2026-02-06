@@ -38,8 +38,8 @@ services:
     image: clickhouse/clickhouse-server:24.3-alpine
     container_name: monitor-clickhouse
     ports:
-      - "8123:8123"   # HTTP interface
-      - "9000:9000"   # Native protocol
+      - "8123:8123"
+      - "9000:9000"
     environment:
       CLICKHOUSE_DB: monitor
       CLICKHOUSE_USER: ${CLICKHOUSE_USERNAME:-default}

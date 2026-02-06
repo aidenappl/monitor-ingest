@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -16,36 +17,51 @@ var Conn driver.Conn
 // Database is the current database name
 var Database string
 
-// Connect establishes a connection to ClickHouse
+// Connect establishes a connection to ClickHouse with retry logic
 func Connect(ctx context.Context, addr, database, username, password string) error {
-	conn, err := clickhouse.Open(&clickhouse.Options{
-		Addr: []string{addr},
-		Auth: clickhouse.Auth{
-			Database: database,
-			Username: username,
-			Password: password,
-		},
-		Debug: false,
-		Settings: clickhouse.Settings{
-			"max_execution_time": 60,
-		},
-		Compression: &clickhouse.Compression{
-			Method: clickhouse.CompressionLZ4,
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to open clickhouse connection: %w", err)
+	var conn driver.Conn
+	var err error
+
+	// Retry connection up to 10 times with exponential backoff
+	for attempt := 1; attempt <= 10; attempt++ {
+		conn, err = clickhouse.Open(&clickhouse.Options{
+			Addr: []string{addr},
+			Auth: clickhouse.Auth{
+				Database: database,
+				Username: username,
+				Password: password,
+			},
+			Debug: false,
+			Settings: clickhouse.Settings{
+				"max_execution_time": 60,
+			},
+			Compression: &clickhouse.Compression{
+				Method: clickhouse.CompressionLZ4,
+			},
+			MaxOpenConns:    10,
+			MaxIdleConns:    5,
+			ConnMaxLifetime: time.Hour,
+		})
+		if err != nil {
+			log.Printf("attempt %d: failed to open clickhouse connection: %v", attempt, err)
+			time.Sleep(time.Duration(attempt) * time.Second)
+			continue
+		}
+
+		if err = conn.Ping(ctx); err != nil {
+			log.Printf("attempt %d: failed to ping clickhouse: %v", attempt, err)
+			time.Sleep(time.Duration(attempt) * time.Second)
+			continue
+		}
+
+		// Success
+		log.Printf("connected to ClickHouse at %s", addr)
+		Conn = conn
+		Database = database
+		return nil
 	}
 
-	if err := conn.Ping(ctx); err != nil {
-		return fmt.Errorf("failed to ping clickhouse: %w", err)
-	}
-
-	log.Printf("connected to ClickHouse at %s", addr)
-
-	Conn = conn
-	Database = database
-	return nil
+	return fmt.Errorf("failed to connect to clickhouse after 10 attempts: %w", err)
 }
 
 // WriteBatch inserts a batch of events into ClickHouse

@@ -58,6 +58,20 @@ go build -o bin/monitor-ingest .
 ./bin/monitor-ingest
 ```
 
+### Docker
+
+Local development with ClickHouse:
+
+```bash
+docker-compose -f docker-compose.dev.yml up -d
+```
+
+Production deployment:
+
+```bash
+docker-compose up -d
+```
+
 ## API
 
 ### Health Check
@@ -90,17 +104,19 @@ Response:
 
 ### Event Format
 
-Each event must be a JSON object on its own line with these required fields:
+Each event must be a JSON object on its own line with these fields:
 
-| Field        | Type             | Description                                   |
-| ------------ | ---------------- | --------------------------------------------- |
-| `timestamp`  | string (RFC3339) | When the event occurred                       |
-| `service`    | string           | Service name that generated the event         |
-| `job_id`     | string           | Groups related requests within a service      |
-| `request_id` | string           | Unique identifier per incoming request        |
-| `trace_id`   | string           | Spans across services for distributed tracing |
-| `name`       | string           | Event type/name                               |
-| `data`       | object           | Optional additional event data                |
+| Field        | Type             | Required | Description                                   |
+| ------------ | ---------------- | -------- | --------------------------------------------- |
+| `timestamp`  | string (RFC3339) | Yes      | When the event occurred                       |
+| `service`    | string           | Yes      | Service name that generated the event         |
+| `name`       | string           | Yes      | Event type/name                               |
+| `env`        | string           | No       | Environment (e.g., production, staging)       |
+| `job_id`     | string           | No       | Groups related requests within a service      |
+| `request_id` | string           | No       | Unique identifier per incoming request        |
+| `trace_id`   | string           | No       | Spans across services for distributed tracing |
+| `level`      | string           | No       | Log level (info, warn, error, debug)          |
+| `data`       | object           | No       | Additional event data                         |
 
 ## Configuration
 
@@ -116,26 +132,36 @@ Each event must be a JSON object on its own line with these required fields:
 | `FLUSH_INTERVAL`      | `5s`             | Max time to wait before flushing batch        |
 | `QUEUE_SIZE`          | `100000`         | Max events in memory queue                    |
 
+## Limits
+
+- **Request body size**: 10 MB maximum
+- **ClickHouse connection retry**: 10 attempts with exponential backoff (1s to 5min)
+
 ## Project Structure
 
 ```
 monitor-ingest/
-  main.go                    # Entry point with routes
+  main.go                     # Entry point with routes
+  Dockerfile                  # Multi-stage production build
+  docker-compose.yml          # Production stack
+  docker-compose.dev.yml      # Local development with ClickHouse
   db/
-    clickhouse.go            # ClickHouse connection and batch writer
+    clickhouse.go             # ClickHouse connection and batch writer
   env/
-    env.go                   # Environment configuration
+    env.go                    # Environment configuration
   middleware/
-    auth.go                  # API key authentication middleware
+    auth.go                   # API key authentication middleware
   routes/
-    events.go                # Event ingestion handler
+    events.go                 # Event ingestion handler
   services/
-    queue.go                 # Buffered event queue
-    batcher.go               # Batch collection and flushing
+    queue.go                  # Buffered event queue
+    batcher.go                # Batch collection and flushing
   structs/
-    event.go                 # Event struct and validation
+    event.go                  # Event struct and validation
   migrations/
-    001_schema.sql           # ClickHouse schema
+    001_schema.sql            # ClickHouse schema
+  .github/workflows/
+    build-and-deploy.yml      # CI/CD pipeline
 ```
 
 ## Querying Events

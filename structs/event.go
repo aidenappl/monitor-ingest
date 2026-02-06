@@ -27,9 +27,6 @@ func (e *Event) Validate() error {
 	if e.Service == "" {
 		return errors.New("service is required")
 	}
-	if e.JobID == "" && e.RequestID == "" && e.TraceID == "" {
-		return errors.New("at least one of job_id, request_id, or trace_id is required")
-	}
 	if e.Name == "" {
 		return errors.New("name is required")
 	}

@@ -14,6 +14,9 @@ import (
 	"github.com/aidenappl/monitor-ingest/structs"
 )
 
+// MaxRequestBodySize limits request body to 10MB
+const MaxRequestBodySize = 10 * 1024 * 1024
+
 // Queue is the global event queue (set from main.go)
 var Queue *services.Queue
 
@@ -32,6 +35,9 @@ func HealthHandler(w http.ResponseWriter, r *http.Request) {
 
 // IngestEventsHandler processes incoming NDJSON events
 func IngestEventsHandler(w http.ResponseWriter, r *http.Request) {
+	// Limit request body size
+	r.Body = http.MaxBytesReader(w, r.Body, MaxRequestBodySize)
+
 	bodyReader, err := getBodyReader(r)
 	if err != nil {
 		log.Printf("failed to get body reader: %v", err)
