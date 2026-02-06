@@ -122,27 +122,28 @@ func applyColumnFilter(builder sq.SelectBuilder, f Filter) sq.SelectBuilder {
 }
 
 func applyDataFilter(builder sq.SelectBuilder, f Filter) sq.SelectBuilder {
-	extract := fmt.Sprintf("JSONExtractString(data, '%s')", f.Field)
+	extractStr := fmt.Sprintf("JSONExtractString(data, '%s')", f.Field)
+	extractNum := fmt.Sprintf("JSONExtractFloat64(data, '%s')", f.Field)
 
 	switch f.Operator {
 	case OpEq, "":
-		builder = builder.Where(fmt.Sprintf("%s = ?", extract), f.Value)
+		builder = builder.Where(fmt.Sprintf("%s = ?", extractStr), f.Value)
 	case OpNeq:
-		builder = builder.Where(fmt.Sprintf("%s != ?", extract), f.Value)
+		builder = builder.Where(fmt.Sprintf("%s != ?", extractStr), f.Value)
 	case OpLt:
-		builder = builder.Where(fmt.Sprintf("%s < ?", extract), f.Value)
+		builder = builder.Where(fmt.Sprintf("%s < ?", extractNum), f.Value)
 	case OpGt:
-		builder = builder.Where(fmt.Sprintf("%s > ?", extract), f.Value)
+		builder = builder.Where(fmt.Sprintf("%s > ?", extractNum), f.Value)
 	case OpLte:
-		builder = builder.Where(fmt.Sprintf("%s <= ?", extract), f.Value)
+		builder = builder.Where(fmt.Sprintf("%s <= ?", extractNum), f.Value)
 	case OpGte:
-		builder = builder.Where(fmt.Sprintf("%s >= ?", extract), f.Value)
+		builder = builder.Where(fmt.Sprintf("%s >= ?", extractNum), f.Value)
 	case OpContains:
-		builder = builder.Where(fmt.Sprintf("%s LIKE ?", extract), fmt.Sprintf("%%%v%%", f.Value))
+		builder = builder.Where(fmt.Sprintf("%s LIKE ?", extractStr), fmt.Sprintf("%%%v%%", f.Value))
 	case OpStartsWith:
-		builder = builder.Where(fmt.Sprintf("%s LIKE ?", extract), fmt.Sprintf("%v%%", f.Value))
+		builder = builder.Where(fmt.Sprintf("%s LIKE ?", extractStr), fmt.Sprintf("%v%%", f.Value))
 	case OpEndsWith:
-		builder = builder.Where(fmt.Sprintf("%s LIKE ?", extract), fmt.Sprintf("%%%v", f.Value))
+		builder = builder.Where(fmt.Sprintf("%s LIKE ?", extractStr), fmt.Sprintf("%%%v", f.Value))
 	}
 
 	return builder
