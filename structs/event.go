@@ -3,8 +3,12 @@ package structs
 import (
 	"encoding/json"
 	"errors"
+	"regexp"
 	"time"
 )
+
+// uuidRegex matches standard UUID format (with or without hyphens)
+var uuidRegex = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // Event represents a single monitoring event
 type Event struct {
@@ -19,7 +23,7 @@ type Event struct {
 	Data      map[string]interface{} `json:"data"`
 }
 
-// Validate checks that all required fields are present
+// Validate checks that all required fields are present and IDs are valid UUIDs
 func (e *Event) Validate() error {
 	if e.Timestamp.IsZero() {
 		return errors.New("timestamp is required")
@@ -29,6 +33,15 @@ func (e *Event) Validate() error {
 	}
 	if e.Name == "" {
 		return errors.New("name is required")
+	}
+	if e.JobID != "" && !uuidRegex.MatchString(e.JobID) {
+		return errors.New("job_id must be a valid UUID")
+	}
+	if e.RequestID != "" && !uuidRegex.MatchString(e.RequestID) {
+		return errors.New("request_id must be a valid UUID")
+	}
+	if e.TraceID != "" && !uuidRegex.MatchString(e.TraceID) {
+		return errors.New("trace_id must be a valid UUID")
 	}
 	return nil
 }
