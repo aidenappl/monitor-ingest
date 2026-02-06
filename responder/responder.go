@@ -2,6 +2,7 @@ package responder
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 )
@@ -68,6 +69,22 @@ func New(w http.ResponseWriter, data interface{}, message ...string) {
 }
 
 func Error(w http.ResponseWriter, statusCode int, message string) {
+	log.Printf("[%d] %s", statusCode, message)
+
+	response := Response{
+		Success: false,
+		Message: strings.ToLower(message),
+		Data:    nil,
+	}
+
+	w.Header().Set("Content-Type", ContentTypeJSON)
+	w.WriteHeader(statusCode)
+	json.NewEncoder(w).Encode(response)
+}
+
+func ErrorWithCause(w http.ResponseWriter, statusCode int, message string, err error) {
+	log.Printf("[%d] %s: %v", statusCode, message, err)
+
 	response := Response{
 		Success: false,
 		Message: strings.ToLower(message),

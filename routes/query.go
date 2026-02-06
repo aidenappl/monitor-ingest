@@ -20,7 +20,7 @@ func QueryEventsHandler(w http.ResponseWriter, r *http.Request) {
 
 	result, err := services.QueryEvents(r.Context(), params)
 	if err != nil {
-		responder.Error(w, http.StatusInternalServerError, "failed to query events")
+		responder.ErrorWithCause(w, http.StatusInternalServerError, "failed to query events", err)
 		return
 	}
 
@@ -44,7 +44,7 @@ func GetLabelValuesHandler(w http.ResponseWriter, r *http.Request) {
 			responder.Error(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		responder.Error(w, http.StatusInternalServerError, "failed to get label values")
+		responder.ErrorWithCause(w, http.StatusInternalServerError, "failed to get label values", err)
 		return
 	}
 
@@ -60,7 +60,7 @@ func GetDataKeysHandler(w http.ResponseWriter, r *http.Request) {
 
 	result, err := services.GetDataKeys(r.Context(), params)
 	if err != nil {
-		responder.Error(w, http.StatusInternalServerError, "failed to get data keys")
+		responder.ErrorWithCause(w, http.StatusInternalServerError, "failed to get data keys", err)
 		return
 	}
 
@@ -82,7 +82,7 @@ func GetDataValuesHandler(w http.ResponseWriter, r *http.Request) {
 
 	result, err := services.GetDataValues(r.Context(), key, params)
 	if err != nil {
-		responder.Error(w, http.StatusInternalServerError, "failed to get data values")
+		responder.ErrorWithCause(w, http.StatusInternalServerError, "failed to get data values", err)
 		return
 	}
 

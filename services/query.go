@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
+	sq "github.com/Masterminds/squirrel"
 	"github.com/aidenappl/monitor-core/db"
 	"github.com/aidenappl/monitor-core/structs"
 )
@@ -39,6 +39,44 @@ type DataKeysResult struct {
 	Keys []string `json:"keys"`
 }
 
+func eventsTable() string {
+	return fmt.Sprintf("%s.events", db.Database)
+}
+
+func applyFilters(builder sq.SelectBuilder, params QueryParams) sq.SelectBuilder {
+	if params.Service != "" {
+		builder = builder.Where(sq.Eq{"service": params.Service})
+	}
+	if params.Env != "" {
+		builder = builder.Where(sq.Eq{"env": params.Env})
+	}
+	if params.JobID != "" {
+		builder = builder.Where(sq.Eq{"job_id": params.JobID})
+	}
+	if params.RequestID != "" {
+		builder = builder.Where(sq.Eq{"request_id": params.RequestID})
+	}
+	if params.TraceID != "" {
+		builder = builder.Where(sq.Eq{"trace_id": params.TraceID})
+	}
+	if params.Name != "" {
+		builder = builder.Where(sq.Eq{"name": params.Name})
+	}
+	if params.Level != "" {
+		builder = builder.Where(sq.Eq{"level": params.Level})
+	}
+	if !params.From.IsZero() {
+		builder = builder.Where(sq.GtOrEq{"timestamp": params.From})
+	}
+	if !params.To.IsZero() {
+		builder = builder.Where(sq.LtOrEq{"timestamp": params.To})
+	}
+	for key, value := range params.DataFilters {
+		builder = builder.Where("JSONExtractString(data, ?) = ?", key, value)
+	}
+	return builder
+}
+
 func QueryEvents(ctx context.Context, params QueryParams) (*QueryResult, error) {
 	if params.Limit <= 0 {
 		params.Limit = 100
@@ -47,68 +85,37 @@ func QueryEvents(ctx context.Context, params QueryParams) (*QueryResult, error) 
 		params.Limit = 1000
 	}
 
-	// Build WHERE clauses
-	var conditions []string
-	var args []interface{}
-	argIndex := 0
-
-	addCondition := func(column, value string) {
-		if value != "" {
-			conditions = append(conditions, fmt.Sprintf("%s = $%d", column, argIndex))
-			args = append(args, value)
-			argIndex++
-		}
-	}
-
-	addCondition("service", params.Service)
-	addCondition("env", params.Env)
-	addCondition("job_id", params.JobID)
-	addCondition("request_id", params.RequestID)
-	addCondition("trace_id", params.TraceID)
-	addCondition("name", params.Name)
-	addCondition("level", params.Level)
-
-	if !params.From.IsZero() {
-		conditions = append(conditions, fmt.Sprintf("timestamp >= $%d", argIndex))
-		args = append(args, params.From)
-		argIndex++
-	}
-
-	if !params.To.IsZero() {
-		conditions = append(conditions, fmt.Sprintf("timestamp <= $%d", argIndex))
-		args = append(args, params.To)
-		argIndex++
-	}
-
-	// Data filters (JSON field queries)
-	for key, value := range params.DataFilters {
-		conditions = append(conditions, fmt.Sprintf("JSONExtractString(data, $%d) = $%d", argIndex, argIndex+1))
-		args = append(args, key, value)
-		argIndex += 2
-	}
-
-	whereClause := ""
-	if len(conditions) > 0 {
-		whereClause = "WHERE " + strings.Join(conditions, " AND ")
-	}
-
 	// Count query
-	countQuery := fmt.Sprintf("SELECT count() FROM %s.events %s", db.Database, whereClause)
+	countBuilder := sq.Select("count()").
+		From(eventsTable()).
+		PlaceholderFormat(sq.Question)
+	countBuilder = applyFilters(countBuilder, params)
+
+	countSQL, countArgs, err := countBuilder.ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build count query: %w", err)
+	}
+
 	var total uint64
-	if err := db.Conn.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := db.Conn.QueryRow(ctx, countSQL, countArgs...).Scan(&total); err != nil {
 		return nil, fmt.Errorf("count query failed: %w", err)
 	}
 
 	// Data query
-	query := fmt.Sprintf(`
-		SELECT timestamp, service, env, job_id, request_id, trace_id, name, level, data
-		FROM %s.events
-		%s
-		ORDER BY timestamp DESC
-		LIMIT %d OFFSET %d
-	`, db.Database, whereClause, params.Limit, params.Offset)
+	queryBuilder := sq.Select("timestamp", "service", "env", "job_id", "request_id", "trace_id", "name", "level", "data").
+		From(eventsTable()).
+		OrderBy("timestamp DESC").
+		Limit(uint64(params.Limit)).
+		Offset(uint64(params.Offset)).
+		PlaceholderFormat(sq.Question)
+	queryBuilder = applyFilters(queryBuilder, params)
 
-	rows, err := db.Conn.Query(ctx, query, args...)
+	querySQL, queryArgs, err := queryBuilder.ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build query: %w", err)
+	}
+
+	rows, err := db.Conn.Query(ctx, querySQL, queryArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("query failed: %w", err)
 	}
@@ -150,50 +157,38 @@ func GetLabelValues(ctx context.Context, label string, params QueryParams) (*Lab
 		return nil, fmt.Errorf("invalid label: %s", label)
 	}
 
-	// Build WHERE clauses for filtering
-	var conditions []string
-	var args []interface{}
-	argIndex := 0
+	builder := sq.Select(fmt.Sprintf("DISTINCT %s", column)).
+		From(eventsTable()).
+		OrderBy(column).
+		Limit(1000).
+		PlaceholderFormat(sq.Question)
 
-	addCondition := func(col, value string) {
-		if value != "" && col != column {
-			conditions = append(conditions, fmt.Sprintf("%s = $%d", col, argIndex))
-			args = append(args, value)
-			argIndex++
-		}
+	// Apply filters except the one we're getting values for
+	if params.Service != "" && column != "service" {
+		builder = builder.Where(sq.Eq{"service": params.Service})
 	}
-
-	addCondition("service", params.Service)
-	addCondition("env", params.Env)
-	addCondition("name", params.Name)
-	addCondition("level", params.Level)
-
+	if params.Env != "" && column != "env" {
+		builder = builder.Where(sq.Eq{"env": params.Env})
+	}
+	if params.Name != "" && column != "name" {
+		builder = builder.Where(sq.Eq{"name": params.Name})
+	}
+	if params.Level != "" && column != "level" {
+		builder = builder.Where(sq.Eq{"level": params.Level})
+	}
 	if !params.From.IsZero() {
-		conditions = append(conditions, fmt.Sprintf("timestamp >= $%d", argIndex))
-		args = append(args, params.From)
-		argIndex++
+		builder = builder.Where(sq.GtOrEq{"timestamp": params.From})
 	}
-
 	if !params.To.IsZero() {
-		conditions = append(conditions, fmt.Sprintf("timestamp <= $%d", argIndex))
-		args = append(args, params.To)
-		argIndex++
+		builder = builder.Where(sq.LtOrEq{"timestamp": params.To})
 	}
 
-	whereClause := ""
-	if len(conditions) > 0 {
-		whereClause = "WHERE " + strings.Join(conditions, " AND ")
+	querySQL, queryArgs, err := builder.ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build query: %w", err)
 	}
 
-	query := fmt.Sprintf(`
-		SELECT DISTINCT %s
-		FROM %s.events
-		%s
-		ORDER BY %s
-		LIMIT 1000
-	`, column, db.Database, whereClause, column)
-
-	rows, err := db.Conn.Query(ctx, query, args...)
+	rows, err := db.Conn.Query(ctx, querySQL, queryArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("query failed: %w", err)
 	}
@@ -218,50 +213,37 @@ func GetLabelValues(ctx context.Context, label string, params QueryParams) (*Lab
 }
 
 func GetDataKeys(ctx context.Context, params QueryParams) (*DataKeysResult, error) {
-	var conditions []string
-	var args []interface{}
-	argIndex := 0
+	builder := sq.Select("DISTINCT arrayJoin(JSONExtractKeys(data)) AS key").
+		From(eventsTable()).
+		OrderBy("key").
+		Limit(1000).
+		PlaceholderFormat(sq.Question)
 
-	addCondition := func(column, value string) {
-		if value != "" {
-			conditions = append(conditions, fmt.Sprintf("%s = $%d", column, argIndex))
-			args = append(args, value)
-			argIndex++
-		}
+	if params.Service != "" {
+		builder = builder.Where(sq.Eq{"service": params.Service})
 	}
-
-	addCondition("service", params.Service)
-	addCondition("env", params.Env)
-	addCondition("name", params.Name)
-	addCondition("level", params.Level)
-
+	if params.Env != "" {
+		builder = builder.Where(sq.Eq{"env": params.Env})
+	}
+	if params.Name != "" {
+		builder = builder.Where(sq.Eq{"name": params.Name})
+	}
+	if params.Level != "" {
+		builder = builder.Where(sq.Eq{"level": params.Level})
+	}
 	if !params.From.IsZero() {
-		conditions = append(conditions, fmt.Sprintf("timestamp >= $%d", argIndex))
-		args = append(args, params.From)
-		argIndex++
+		builder = builder.Where(sq.GtOrEq{"timestamp": params.From})
 	}
-
 	if !params.To.IsZero() {
-		conditions = append(conditions, fmt.Sprintf("timestamp <= $%d", argIndex))
-		args = append(args, params.To)
-		argIndex++
+		builder = builder.Where(sq.LtOrEq{"timestamp": params.To})
 	}
 
-	whereClause := ""
-	if len(conditions) > 0 {
-		whereClause = "WHERE " + strings.Join(conditions, " AND ")
+	querySQL, queryArgs, err := builder.ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build query: %w", err)
 	}
 
-	// Extract distinct keys from JSON data column
-	query := fmt.Sprintf(`
-		SELECT DISTINCT arrayJoin(JSONExtractKeys(data)) AS key
-		FROM %s.events
-		%s
-		ORDER BY key
-		LIMIT 1000
-	`, db.Database, whereClause)
-
-	rows, err := db.Conn.Query(ctx, query, args...)
+	rows, err := db.Conn.Query(ctx, querySQL, queryArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("query failed: %w", err)
 	}
@@ -288,53 +270,43 @@ func GetDataValues(ctx context.Context, key string, params QueryParams) (*LabelV
 		return nil, fmt.Errorf("key is required")
 	}
 
-	var conditions []string
-	var args []interface{}
-	argIndex := 0
+	builder := sq.Select("DISTINCT JSONExtractString(data, ?) AS value").
+		From(eventsTable()).
+		OrderBy("value").
+		Limit(1000).
+		PlaceholderFormat(sq.Question)
 
-	addCondition := func(column, value string) {
-		if value != "" {
-			conditions = append(conditions, fmt.Sprintf("%s = $%d", column, argIndex))
-			args = append(args, value)
-			argIndex++
-		}
+	if params.Service != "" {
+		builder = builder.Where(sq.Eq{"service": params.Service})
 	}
-
-	addCondition("service", params.Service)
-	addCondition("env", params.Env)
-	addCondition("name", params.Name)
-	addCondition("level", params.Level)
-
+	if params.Env != "" {
+		builder = builder.Where(sq.Eq{"env": params.Env})
+	}
+	if params.Name != "" {
+		builder = builder.Where(sq.Eq{"name": params.Name})
+	}
+	if params.Level != "" {
+		builder = builder.Where(sq.Eq{"level": params.Level})
+	}
 	if !params.From.IsZero() {
-		conditions = append(conditions, fmt.Sprintf("timestamp >= $%d", argIndex))
-		args = append(args, params.From)
-		argIndex++
+		builder = builder.Where(sq.GtOrEq{"timestamp": params.From})
 	}
-
 	if !params.To.IsZero() {
-		conditions = append(conditions, fmt.Sprintf("timestamp <= $%d", argIndex))
-		args = append(args, params.To)
-		argIndex++
+		builder = builder.Where(sq.LtOrEq{"timestamp": params.To})
 	}
 
-	whereClause := ""
-	if len(conditions) > 0 {
-		whereClause = "WHERE " + strings.Join(conditions, " AND ")
+	// Add HAVING clause manually since squirrel doesn't support it well
+	builder = builder.Suffix("HAVING value != ''")
+
+	querySQL, queryArgs, err := builder.ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build query: %w", err)
 	}
 
-	// Get distinct values for a specific JSON key
-	query := fmt.Sprintf(`
-		SELECT DISTINCT JSONExtractString(data, $%d) AS value
-		FROM %s.events
-		%s
-		HAVING value != ''
-		ORDER BY value
-		LIMIT 1000
-	`, argIndex, db.Database, whereClause)
+	// Prepend the key argument for JSONExtractString
+	queryArgs = append([]interface{}{key}, queryArgs...)
 
-	args = append(args, key)
-
-	rows, err := db.Conn.Query(ctx, query, args...)
+	rows, err := db.Conn.Query(ctx, querySQL, queryArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("query failed: %w", err)
 	}
