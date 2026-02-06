@@ -31,4 +31,4 @@ commands:
     run: docker-compose -f docker-compose.dev.yml logs -f
   - name: migrate
     description: Run migrations against local ClickHouse
-    run: clickhouse-client --host localhost < migrations/001_schema.sql
+    run: for f in migrations/*.sql; do clickhouse-client --host localhost < "$f"; done

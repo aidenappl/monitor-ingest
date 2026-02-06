@@ -44,7 +44,7 @@ dev migrate
 Or manually:
 
 ```bash
-clickhouse-client < migrations/001_schema.sql
+for f in migrations/*.sql; do clickhouse-client < "$f"; done
 ```
 
 ### 3. Configure environment (optional)
@@ -117,6 +117,7 @@ Each event must be a JSON object on its own line with these fields:
 | `job_id`     | string           | No       | Groups related requests within a service      |
 | `request_id` | string           | No       | Unique identifier per incoming request        |
 | `trace_id`   | string           | No       | Spans across services for distributed tracing |
+| `user_id`    | string           | No       | User identifier for user-scoped queries       |
 | `level`      | string           | No       | Log level (info, warn, error, debug)          |
 | `data`       | object           | No       | Additional event data                         |
 
@@ -138,6 +139,7 @@ curl "http://localhost:8080/v1/events?service=users&level=error&limit=50" \
 | `job_id`     | Filter by job ID                               |
 | `request_id` | Filter by request ID                           |
 | `trace_id`   | Filter by trace ID                             |
+| `user_id`    | Filter by user ID                              |
 | `name`       | Filter by event name                           |
 | `level`      | Filter by log level                            |
 | `from`       | Start time (RFC3339 or Unix timestamp)         |
@@ -145,6 +147,39 @@ curl "http://localhost:8080/v1/events?service=users&level=error&limit=50" \
 | `data.<key>` | Filter by data field (e.g., `data.user_id=42`) |
 | `limit`      | Results per page (default: 100, max: 1000)     |
 | `offset`     | Pagination offset                              |
+
+**Filter Operators:**
+
+Filters support operators using Django-style syntax: `field__operator=value`
+
+| Operator     | Example                          | Description             |
+| ------------ | -------------------------------- | ----------------------- |
+| `eq`         | `service=users` or `service__eq` | Equals (default)        |
+| `neq`        | `level__neq=debug`               | Not equals              |
+| `lt`         | `data.count__lt=100`             | Less than               |
+| `gt`         | `data.count__gt=10`              | Greater than            |
+| `lte`        | `data.latency__lte=500`          | Less than or equal      |
+| `gte`        | `data.latency__gte=100`          | Greater than or equal   |
+| `contains`   | `name__contains=user`            | Contains substring      |
+| `startswith` | `service__startswith=auth`       | Starts with             |
+| `endswith`   | `name__endswith=.error`          | Ends with               |
+| `in`         | `level__in=error,warn`           | Matches any (comma-sep) |
+
+**Examples:**
+
+```bash
+# Find errors and warnings
+curl "http://localhost:8080/v1/events?level__in=error,warn"
+
+# Find events with latency > 500ms
+curl "http://localhost:8080/v1/events?data.latency_ms__gt=500"
+
+# Find user-related events
+curl "http://localhost:8080/v1/events?name__contains=user"
+
+# Exclude debug logs
+curl "http://localhost:8080/v1/events?level__neq=debug"
+```
 
 Response:
 

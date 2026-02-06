@@ -11,19 +11,34 @@ import (
 	"github.com/aidenappl/monitor-core/structs"
 )
 
+type Operator string
+
+const (
+	OpEq         Operator = "eq"
+	OpNeq        Operator = "neq"
+	OpLt         Operator = "lt"
+	OpGt         Operator = "gt"
+	OpLte        Operator = "lte"
+	OpGte        Operator = "gte"
+	OpContains   Operator = "contains"
+	OpStartsWith Operator = "startswith"
+	OpEndsWith   Operator = "endswith"
+	OpIn         Operator = "in"
+)
+
+type Filter struct {
+	Field    string
+	Operator Operator
+	Value    interface{}
+	IsData   bool // true if this is a data.X filter
+}
+
 type QueryParams struct {
-	Service     string
-	Env         string
-	JobID       string
-	RequestID   string
-	TraceID     string
-	Name        string
-	Level       string
-	From        time.Time
-	To          time.Time
-	DataFilters map[string]string
-	Limit       int
-	Offset      int
+	Filters []Filter
+	From    time.Time
+	To      time.Time
+	Limit   int
+	Offset  int
 }
 
 type QueryResult struct {
@@ -43,37 +58,93 @@ func eventsTable() string {
 	return fmt.Sprintf("%s.events", db.Database)
 }
 
+var validColumns = map[string]bool{
+	"service":    true,
+	"env":        true,
+	"job_id":     true,
+	"request_id": true,
+	"trace_id":   true,
+	"user_id":    true,
+	"name":       true,
+	"level":      true,
+}
+
 func applyFilters(builder sq.SelectBuilder, params QueryParams) sq.SelectBuilder {
-	if params.Service != "" {
-		builder = builder.Where(sq.Eq{"service": params.Service})
+	for _, f := range params.Filters {
+		if f.IsData {
+			builder = applyDataFilter(builder, f)
+		} else {
+			builder = applyColumnFilter(builder, f)
+		}
 	}
-	if params.Env != "" {
-		builder = builder.Where(sq.Eq{"env": params.Env})
-	}
-	if params.JobID != "" {
-		builder = builder.Where(sq.Eq{"job_id": params.JobID})
-	}
-	if params.RequestID != "" {
-		builder = builder.Where(sq.Eq{"request_id": params.RequestID})
-	}
-	if params.TraceID != "" {
-		builder = builder.Where(sq.Eq{"trace_id": params.TraceID})
-	}
-	if params.Name != "" {
-		builder = builder.Where(sq.Eq{"name": params.Name})
-	}
-	if params.Level != "" {
-		builder = builder.Where(sq.Eq{"level": params.Level})
-	}
+
 	if !params.From.IsZero() {
 		builder = builder.Where(sq.GtOrEq{"timestamp": params.From})
 	}
 	if !params.To.IsZero() {
 		builder = builder.Where(sq.LtOrEq{"timestamp": params.To})
 	}
-	for key, value := range params.DataFilters {
-		builder = builder.Where("JSONExtractString(data, ?) = ?", key, value)
+
+	return builder
+}
+
+func applyColumnFilter(builder sq.SelectBuilder, f Filter) sq.SelectBuilder {
+	if !validColumns[f.Field] {
+		return builder
 	}
+
+	switch f.Operator {
+	case OpEq, "":
+		builder = builder.Where(sq.Eq{f.Field: f.Value})
+	case OpNeq:
+		builder = builder.Where(sq.NotEq{f.Field: f.Value})
+	case OpLt:
+		builder = builder.Where(sq.Lt{f.Field: f.Value})
+	case OpGt:
+		builder = builder.Where(sq.Gt{f.Field: f.Value})
+	case OpLte:
+		builder = builder.Where(sq.LtOrEq{f.Field: f.Value})
+	case OpGte:
+		builder = builder.Where(sq.GtOrEq{f.Field: f.Value})
+	case OpContains:
+		builder = builder.Where(sq.Like{f.Field: fmt.Sprintf("%%%v%%", f.Value)})
+	case OpStartsWith:
+		builder = builder.Where(sq.Like{f.Field: fmt.Sprintf("%v%%", f.Value)})
+	case OpEndsWith:
+		builder = builder.Where(sq.Like{f.Field: fmt.Sprintf("%%%v", f.Value)})
+	case OpIn:
+		if values, ok := f.Value.([]string); ok {
+			builder = builder.Where(sq.Eq{f.Field: values})
+		}
+	}
+
+	return builder
+}
+
+func applyDataFilter(builder sq.SelectBuilder, f Filter) sq.SelectBuilder {
+	extract := fmt.Sprintf("JSONExtractString(data, '%s')", f.Field)
+
+	switch f.Operator {
+	case OpEq, "":
+		builder = builder.Where(fmt.Sprintf("%s = ?", extract), f.Value)
+	case OpNeq:
+		builder = builder.Where(fmt.Sprintf("%s != ?", extract), f.Value)
+	case OpLt:
+		builder = builder.Where(fmt.Sprintf("%s < ?", extract), f.Value)
+	case OpGt:
+		builder = builder.Where(fmt.Sprintf("%s > ?", extract), f.Value)
+	case OpLte:
+		builder = builder.Where(fmt.Sprintf("%s <= ?", extract), f.Value)
+	case OpGte:
+		builder = builder.Where(fmt.Sprintf("%s >= ?", extract), f.Value)
+	case OpContains:
+		builder = builder.Where(fmt.Sprintf("%s LIKE ?", extract), fmt.Sprintf("%%%v%%", f.Value))
+	case OpStartsWith:
+		builder = builder.Where(fmt.Sprintf("%s LIKE ?", extract), fmt.Sprintf("%v%%", f.Value))
+	case OpEndsWith:
+		builder = builder.Where(fmt.Sprintf("%s LIKE ?", extract), fmt.Sprintf("%%%v", f.Value))
+	}
+
 	return builder
 }
 
@@ -147,6 +218,7 @@ func QueryEvents(ctx context.Context, params QueryParams) (*QueryResult, error) 
 var validLabels = map[string]string{
 	"service": "service",
 	"env":     "env",
+	"user_id": "user_id",
 	"name":    "name",
 	"level":   "level",
 }
@@ -164,18 +236,17 @@ func GetLabelValues(ctx context.Context, label string, params QueryParams) (*Lab
 		PlaceholderFormat(sq.Question)
 
 	// Apply filters except the one we're getting values for
-	if params.Service != "" && column != "service" {
-		builder = builder.Where(sq.Eq{"service": params.Service})
+	for _, f := range params.Filters {
+		if !f.IsData && f.Field == column {
+			continue
+		}
+		if f.IsData {
+			builder = applyDataFilter(builder, f)
+		} else {
+			builder = applyColumnFilter(builder, f)
+		}
 	}
-	if params.Env != "" && column != "env" {
-		builder = builder.Where(sq.Eq{"env": params.Env})
-	}
-	if params.Name != "" && column != "name" {
-		builder = builder.Where(sq.Eq{"name": params.Name})
-	}
-	if params.Level != "" && column != "level" {
-		builder = builder.Where(sq.Eq{"level": params.Level})
-	}
+
 	if !params.From.IsZero() {
 		builder = builder.Where(sq.GtOrEq{"timestamp": params.From})
 	}
@@ -218,25 +289,7 @@ func GetDataKeys(ctx context.Context, params QueryParams) (*DataKeysResult, erro
 		OrderBy("key").
 		Limit(1000).
 		PlaceholderFormat(sq.Question)
-
-	if params.Service != "" {
-		builder = builder.Where(sq.Eq{"service": params.Service})
-	}
-	if params.Env != "" {
-		builder = builder.Where(sq.Eq{"env": params.Env})
-	}
-	if params.Name != "" {
-		builder = builder.Where(sq.Eq{"name": params.Name})
-	}
-	if params.Level != "" {
-		builder = builder.Where(sq.Eq{"level": params.Level})
-	}
-	if !params.From.IsZero() {
-		builder = builder.Where(sq.GtOrEq{"timestamp": params.From})
-	}
-	if !params.To.IsZero() {
-		builder = builder.Where(sq.LtOrEq{"timestamp": params.To})
-	}
+	builder = applyFilters(builder, params)
 
 	querySQL, queryArgs, err := builder.ToSql()
 	if err != nil {
@@ -275,27 +328,7 @@ func GetDataValues(ctx context.Context, key string, params QueryParams) (*LabelV
 		OrderBy("value").
 		Limit(1000).
 		PlaceholderFormat(sq.Question)
-
-	if params.Service != "" {
-		builder = builder.Where(sq.Eq{"service": params.Service})
-	}
-	if params.Env != "" {
-		builder = builder.Where(sq.Eq{"env": params.Env})
-	}
-	if params.Name != "" {
-		builder = builder.Where(sq.Eq{"name": params.Name})
-	}
-	if params.Level != "" {
-		builder = builder.Where(sq.Eq{"level": params.Level})
-	}
-	if !params.From.IsZero() {
-		builder = builder.Where(sq.GtOrEq{"timestamp": params.From})
-	}
-	if !params.To.IsZero() {
-		builder = builder.Where(sq.LtOrEq{"timestamp": params.To})
-	}
-
-	// Add HAVING clause manually since squirrel doesn't support it well
+	builder = applyFilters(builder, params)
 	builder = builder.Suffix("HAVING value != ''")
 
 	querySQL, queryArgs, err := builder.ToSql()

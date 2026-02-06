@@ -18,6 +18,7 @@ type Event struct {
 	JobID     string                 `json:"job_id"`
 	RequestID string                 `json:"request_id"`
 	TraceID   string                 `json:"trace_id"`
+	UserID    string                 `json:"user_id"`
 	Name      string                 `json:"name"`
 	Level     string                 `json:"level"`
 	Data      map[string]interface{} `json:"data"`

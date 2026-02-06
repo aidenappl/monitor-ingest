@@ -89,25 +89,64 @@ func GetDataValuesHandler(w http.ResponseWriter, r *http.Request) {
 	responder.New(w, result.Values)
 }
 
+// reservedParams are query params that are not filters
+var reservedParams = map[string]bool{
+	"from":   true,
+	"to":     true,
+	"limit":  true,
+	"offset": true,
+	"key":    true,
+}
+
+// validOperators maps suffix to operator
+var validOperators = map[string]services.Operator{
+	"eq":         services.OpEq,
+	"neq":        services.OpNeq,
+	"lt":         services.OpLt,
+	"gt":         services.OpGt,
+	"lte":        services.OpLte,
+	"gte":        services.OpGte,
+	"contains":   services.OpContains,
+	"startswith": services.OpStartsWith,
+	"endswith":   services.OpEndsWith,
+	"in":         services.OpIn,
+}
+
+// parseFilterKey parses "field__operator" into field and operator
+// Returns field, operator, isData
+func parseFilterKey(key string) (string, services.Operator, bool) {
+	isData := false
+	if strings.HasPrefix(key, "data.") {
+		isData = true
+		key = strings.TrimPrefix(key, "data.")
+	}
+
+	parts := strings.Split(key, "__")
+	if len(parts) == 1 {
+		return parts[0], services.OpEq, isData
+	}
+
+	field := parts[0]
+	opStr := parts[len(parts)-1]
+
+	if op, ok := validOperators[opStr]; ok {
+		return field, op, isData
+	}
+
+	// If not a valid operator, treat the whole thing as field name with eq
+	return key, services.OpEq, isData
+}
+
 func parseQueryParams(r *http.Request) (services.QueryParams, error) {
 	q := r.URL.Query()
-
 	params := services.QueryParams{
-		Service:     q.Get("service"),
-		Env:         q.Get("env"),
-		JobID:       q.Get("job_id"),
-		RequestID:   q.Get("request_id"),
-		TraceID:     q.Get("trace_id"),
-		Name:        q.Get("name"),
-		Level:       q.Get("level"),
-		DataFilters: make(map[string]string),
+		Filters: []services.Filter{},
 	}
 
 	// Parse time range
 	if from := q.Get("from"); from != "" {
 		t, err := time.Parse(time.RFC3339, from)
 		if err != nil {
-			// Try unix timestamp
 			if unix, err := strconv.ParseInt(from, 10, 64); err == nil {
 				t = time.Unix(unix, 0)
 			}
@@ -138,12 +177,28 @@ func parseQueryParams(r *http.Request) (services.QueryParams, error) {
 		}
 	}
 
-	// Parse data filters (data.key=value format)
+	// Parse filters
 	for key, values := range q {
-		if strings.HasPrefix(key, "data.") && len(values) > 0 {
-			dataKey := strings.TrimPrefix(key, "data.")
-			params.DataFilters[dataKey] = values[0]
+		if reservedParams[key] || len(values) == 0 {
+			continue
 		}
+
+		field, op, isData := parseFilterKey(key)
+
+		var value interface{}
+		if op == services.OpIn {
+			// For "in" operator, split by comma
+			value = strings.Split(values[0], ",")
+		} else {
+			value = values[0]
+		}
+
+		params.Filters = append(params.Filters, services.Filter{
+			Field:    field,
+			Operator: op,
+			Value:    value,
+			IsData:   isData,
+		})
 	}
 
 	return params, nil
@@ -158,7 +213,6 @@ func buildPaginationURLs(r *http.Request, params services.QueryParams, total int
 	baseURL := r.URL.Path
 	query := r.URL.Query()
 
-	// Calculate next offset
 	nextOffset := params.Offset + limit
 	if nextOffset < total {
 		query.Set("offset", strconv.Itoa(nextOffset))
@@ -166,7 +220,6 @@ func buildPaginationURLs(r *http.Request, params services.QueryParams, total int
 		next = baseURL + "?" + query.Encode()
 	}
 
-	// Calculate prev offset
 	if params.Offset > 0 {
 		prevOffset := params.Offset - limit
 		if prevOffset < 0 {

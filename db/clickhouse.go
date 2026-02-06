@@ -78,6 +78,7 @@ func WriteBatch(ctx context.Context, events []*structs.Event) error {
 			job_id,
 			request_id,
 			trace_id,
+			user_id,
 			name,
 			level,
 			data
@@ -95,6 +96,7 @@ func WriteBatch(ctx context.Context, events []*structs.Event) error {
 			event.JobID,
 			event.RequestID,
 			event.TraceID,
+			event.UserID,
 			event.Name,
 			event.Level,
 			event.DataJSON(),
