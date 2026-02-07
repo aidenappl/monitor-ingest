@@ -249,6 +249,234 @@ Response:
 }
 ```
 
+## Analytics API
+
+The analytics API provides Grafana-compatible endpoints for building dashboards, charts, and gauges.
+
+### Analytics Query
+
+Aggregate data with optional grouping:
+
+```bash
+# Count events grouped by service
+curl -X POST "http://localhost:8080/v1/analytics" \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: your-secret-key" \
+  -d '{
+    "aggregation": "count",
+    "group_by": ["service"],
+    "from": "2026-02-01T00:00:00Z",
+    "to": "2026-02-06T23:59:59Z"
+  }'
+```
+
+**Request Body:**
+
+| Field         | Type     | Required | Description                                                   |
+| ------------- | -------- | -------- | ------------------------------------------------------------- |
+| `aggregation` | string   | No       | Aggregation type (default: `count`)                           |
+| `field`       | string   | \*       | Field to aggregate (required for sum/avg/min/max/percentiles) |
+| `group_by`    | string[] | No       | Fields to group by (max 10)                                   |
+| `filters`     | object[] | No       | Filter conditions                                             |
+| `from`        | string   | No       | Start time (RFC3339 or Unix)                                  |
+| `to`          | string   | No       | End time (RFC3339 or Unix)                                    |
+| `order_by`    | string   | No       | Field to order by (`value` or group field)                    |
+| `order_desc`  | boolean  | No       | Order descending                                              |
+| `limit`       | integer  | No       | Max results (default: 100, max: 10000)                        |
+
+**Aggregation Types:**
+
+| Type           | Description              | Requires Field |
+| -------------- | ------------------------ | -------------- |
+| `count`        | Count of events          | No             |
+| `count_unique` | Count of unique values   | Yes            |
+| `sum`          | Sum of numeric field     | Yes            |
+| `avg`          | Average of numeric field | Yes            |
+| `min`          | Minimum value            | Yes            |
+| `max`          | Maximum value            | Yes            |
+| `p50`          | 50th percentile          | Yes            |
+| `p90`          | 90th percentile          | Yes            |
+| `p95`          | 95th percentile          | Yes            |
+| `p99`          | 99th percentile          | Yes            |
+
+**Filter Format:**
+
+```json
+{
+  "filters": [
+    { "field": "service", "operator": "eq", "value": "users" },
+    { "field": "data.status_code", "operator": "gte", "value": 400 }
+  ]
+}
+```
+
+Response:
+
+```json
+{
+  "success": true,
+  "data": {
+    "data": [
+      { "value": 1523, "groups": { "service": "users" } },
+      { "value": 892, "groups": { "service": "orders" } }
+    ],
+    "total": 2
+  }
+}
+```
+
+**GET endpoint** (query-string based):
+
+```bash
+curl "http://localhost:8080/v1/analytics?aggregation=count&group_by=service&from=2026-02-01T00:00:00Z"
+```
+
+### Time Series Query
+
+Get time-bucketed data for charts:
+
+```bash
+curl -X POST "http://localhost:8080/v1/timeseries" \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: your-secret-key" \
+  -d '{
+    "aggregation": "count",
+    "interval": "hour",
+    "filters": [{ "field": "name", "operator": "eq", "value": "user.login" }],
+    "from": "2026-02-05T00:00:00Z",
+    "to": "2026-02-06T23:59:59Z",
+    "fill_zeros": true
+  }'
+```
+
+**Request Body:**
+
+| Field         | Type     | Required | Description                                  |
+| ------------- | -------- | -------- | -------------------------------------------- |
+| `aggregation` | string   | No       | Aggregation type (default: `count`)          |
+| `field`       | string   | \*       | Field to aggregate                           |
+| `interval`    | string   | Yes      | Time bucket size                             |
+| `group_by`    | string[] | No       | Fields to group by (creates multiple series) |
+| `filters`     | object[] | No       | Filter conditions                            |
+| `from`        | string   | No       | Start time                                   |
+| `to`          | string   | No       | End time                                     |
+| `fill_zeros`  | boolean  | No       | Fill empty buckets with zero                 |
+
+**Interval Types:** `minute`, `hour`, `day`, `week`, `month`
+
+Response:
+
+```json
+{
+  "success": true,
+  "data": {
+    "series": [
+      {
+        "name": "",
+        "data_points": [
+          { "timestamp": "2026-02-05T00:00:00Z", "value": 42 },
+          { "timestamp": "2026-02-05T01:00:00Z", "value": 38 }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**GET endpoint:**
+
+```bash
+curl "http://localhost:8080/v1/timeseries?interval=hour&name=user.login&fill_zeros=true"
+```
+
+### Top N Query
+
+Get top N values for a dimension:
+
+```bash
+curl -X POST "http://localhost:8080/v1/topn" \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: your-secret-key" \
+  -d '{
+    "aggregation": "count",
+    "group_by": "data.endpoint",
+    "limit": 10,
+    "from": "2026-02-01T00:00:00Z",
+    "to": "2026-02-06T23:59:59Z"
+  }'
+```
+
+Response:
+
+```json
+{
+  "success": true,
+  "data": {
+    "data": [
+      { "key": "/api/users", "value": 5234 },
+      { "key": "/api/orders", "value": 3891 }
+    ]
+  }
+}
+```
+
+### Gauge Query
+
+Get a single aggregated value:
+
+```bash
+curl -X POST "http://localhost:8080/v1/gauge" \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: your-secret-key" \
+  -d '{
+    "aggregation": "count",
+    "filters": [{ "field": "level", "operator": "eq", "value": "error" }],
+    "from": "2026-02-06T00:00:00Z",
+    "to": "2026-02-06T23:59:59Z"
+  }'
+```
+
+Response:
+
+```json
+{
+  "success": true,
+  "data": { "value": 127 }
+}
+```
+
+### Compare Query
+
+Compare current period with a previous period:
+
+```bash
+curl -X POST "http://localhost:8080/v1/compare" \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: your-secret-key" \
+  -d '{
+    "aggregation": "count",
+    "filters": [{ "field": "name", "operator": "eq", "value": "http.request" }],
+    "from": "2026-02-06T00:00:00Z",
+    "to": "2026-02-06T23:59:59Z"
+  }'
+```
+
+Response:
+
+```json
+{
+  "success": true,
+  "data": {
+    "current": 1523,
+    "previous": 1342,
+    "change": 181,
+    "change_percent": 13.49
+  }
+}
+```
+
+If `compare_from`/`compare_to` are not specified, the previous period is auto-calculated based on the duration of the current period.
+
 ## Configuration
 
 | Environment Variable  | Default          | Description                                   |
@@ -265,7 +493,10 @@ Response:
 
 ## Limits
 
-- **Request body size**: 10 MB maximum
+- **Request body size**: 10 MB for ingestion, 1 MB for analytics queries
+- **Time series query**: Max 90 days range, max 10,000 data points
+- **Analytics query**: Max 10,000 results, max 10 group by fields
+- **Top N query**: Max 1,000 results
 - **ClickHouse connection retry**: 10 attempts with linear backoff (1s, 2s, ... 10s)
 
 ## Development
@@ -296,21 +527,24 @@ monitor-core/
     env.go                    # Environment configuration
   middleware/
     auth.go                   # API key authentication middleware
+    logging.go                # Request logging middleware
   responder/
     responder.go              # Standardized JSON response utilities
   routes/
     events.go                 # Event ingestion handler
     query.go                  # Event query and autocomplete handlers
+    analytics.go              # Analytics, time series, and gauge handlers
   services/
     queue.go                  # Buffered event queue
     batcher.go                # Batch collection and flushing
     query.go                  # Query building and execution
+    analytics.go              # Analytics query engine
   structs/
     event.go                  # Event struct and validation
+    analytics.go              # Analytics query and result types
   migrations/
     001_schema.sql            # ClickHouse schema
-  .github/workflows/
-    build-and-deploy.yml      # CI/CD pipeline
+    002_add_user_id.sql       # User ID column migration
 ```
 
 ## Querying Events
