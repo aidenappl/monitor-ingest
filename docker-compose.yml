@@ -1,6 +1,32 @@
 version: "3.8"
 
 services:
+  monitor-web:
+    image: registry.appleby.cloud/monitor-web:latest
+    container_name: monitor-web
+    ports:
+      - "3030:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: "0.0.0.0"
+    restart: unless-stopped
+    networks:
+      - monitor-network
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "curl -f http://localhost:3000/api/health || exit 1"
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 45s
+    depends_on:
+      monitor-core:
+        condition: service_healthy
+    labels:
+      - "com.docker.compose.project=monitor-web"
+      - "traefik.enable=false"
   monitor-core:
     image: registry.appleby.cloud/monitor-core:latest
     container_name: monitor-core
